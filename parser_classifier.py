@@ -32,7 +32,7 @@ def extract_naam_field(description):
     Extract the 'Naam' field from a transaction description.
     Captures multiple words if present.
     """
-    pattern = r"Naam:\s*([^\s][^,]*)"
+    pattern = r"Naam:\s*(.+?)\s*(?:Omschrijving|IBAN|Kenmerk|Voor:|$)"
     match = re.search(pattern, description, re.IGNORECASE)
     if match:
         return match.group(1).strip()

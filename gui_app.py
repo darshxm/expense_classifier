@@ -30,36 +30,101 @@ class ExpenseClassifierApp:
         create_expenses_table()  # Ensure the database table exists
 
     def create_widgets(self):
-        # Frame for top actions: import data and add new category
+        """
+        Create and layout all the widgets in the application, including buttons,
+        Treeview for displaying unclassified expenses, category selection dropdown,
+        classification checkbox, and additional controls for filtering and analytics.
+        """
+        # -----------------------------------
+        # Top Frame: Import Data, Add Category, Show Analytics, Filter
+        # -----------------------------------
         top_frame = ttk.Frame(self.root, padding="10")
         top_frame.pack(fill=tk.X)
 
+        # Import Data Button
         import_button = ttk.Button(top_frame, text="Import Data", command=self.import_data)
         import_button.pack(side=tk.LEFT, padx=5)
 
-        # Button for adding a new category
+        # Add Category Button
         add_cat_button = ttk.Button(top_frame, text="Add Category", command=self.add_new_category)
         add_cat_button.pack(side=tk.LEFT, padx=5)
 
-        # Frame for Displaying Unclassified Expenses
+        # Show Analytics Button
+        show_analytics_button = ttk.Button(top_frame, text="Show Analytics", command=self.show_analytics)
+        show_analytics_button.pack(side=tk.LEFT, padx=5)
+
+        # Filter by Transaction Type Label
+        ttk.Label(top_frame, text="Filter by Type:").pack(side=tk.LEFT, padx=5)
+
+        # Filter Dropdown
+        self.transaction_type_filter = tk.StringVar()
+        self.filter_dropdown = ttk.Combobox(
+            top_frame,
+            textvariable=self.transaction_type_filter,
+            values=["All", "SEPA iDEAL", "SEPA Overboeking", "PAS", "Tikkie"],
+            state="readonly"
+        )
+        self.filter_dropdown.set("All")  # Default filter
+        self.filter_dropdown.pack(side=tk.LEFT, padx=5)
+        self.filter_dropdown.bind("<<ComboboxSelected>>", lambda e: self.refresh_unclassified())
+
+        # Refresh Button
+        refresh_button = ttk.Button(top_frame, text="Refresh", command=self.refresh_unclassified)
+        refresh_button.pack(side=tk.LEFT, padx=5)
+
+        # -----------------------------------
+        # Unclassified Expenses Frame with Treeview and Scrollbars
+        # -----------------------------------
         self.unclassified_frame = ttk.LabelFrame(self.root, text="Unclassified Expenses", padding="10")
         self.unclassified_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Setup Treeview
+        # Define Treeview Columns
         columns = ("Date", "Amount", "Description", "Category")
-        self.tree = ttk.Treeview(self.unclassified_frame, columns=columns, show='headings', selectmode='browse')
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, anchor=tk.CENTER, width=150)
 
+        # Create Treeview with Extended Selection Mode
+        self.tree = ttk.Treeview(
+            self.unclassified_frame,
+            columns=columns,
+            show='headings',
+            selectmode='extended',  # Enable multiple selection
+            height=20  # Set a reasonable default height
+        )
+
+        # Define Column Headings and Configuration
+        self.tree.heading("Date", text="Date")
+        self.tree.heading("Amount", text="Amount")
+        self.tree.heading("Description", text="Description")
+        self.tree.heading("Category", text="Category")
+
+        # Configure Column Alignment and Width
+        self.tree.column("Date", anchor=tk.CENTER, width=100, stretch=False)
+        self.tree.column("Amount", anchor=tk.CENTER, width=100, stretch=False)
+        self.tree.column("Description", anchor=tk.W, width=300, stretch=True)  # Left-aligned
+        self.tree.column("Category", anchor=tk.CENTER, width=150, stretch=False)
+
+        # Add Vertical Scrollbar
+        vsb = ttk.Scrollbar(self.unclassified_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Add Horizontal Scrollbar
+        hsb = ttk.Scrollbar(self.unclassified_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(xscrollcommand=hsb.set)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Pack the Treeview
         self.tree.pack(fill=tk.BOTH, expand=True)
 
-        # Frame for Category Selection
+        # -----------------------------------
+        # Category Selection and Classification Controls
+        # -----------------------------------
         category_frame = ttk.Frame(self.root, padding="10")
         category_frame.pack(fill=tk.X)
 
+        # Selected Category Label
         ttk.Label(category_frame, text="Selected Category:").pack(side=tk.LEFT, padx=5)
 
+        # Category Dropdown
         self.selected_category = tk.StringVar()
         self.category_dropdown = ttk.Combobox(
             category_frame,
@@ -69,24 +134,23 @@ class ExpenseClassifierApp:
         )
         self.category_dropdown.pack(side=tk.LEFT, padx=5)
 
+        # Classify All Checkbox
+        self.classify_all_checkbox = tk.BooleanVar()
+        self.classify_all_checkbox.set(False)  # Default is unchecked
+        classify_all_checkbutton = ttk.Checkbutton(
+            category_frame,
+            text="Classify all expenses from this business in the same category",
+            variable=self.classify_all_checkbox
+        )
+        classify_all_checkbutton.pack(side=tk.LEFT, padx=5)
+
+        # Classify Selected Button
         classify_button = ttk.Button(category_frame, text="Classify Selected", command=self.classify_selected)
         classify_button.pack(side=tk.LEFT, padx=5)
+
+
         
-        # Frame for top actions: import data, add new category, and show analytics
-        top_frame = ttk.Frame(self.root, padding="10")
-        top_frame.pack(fill=tk.X)
 
-        import_button = ttk.Button(top_frame, text="Import Data", command=self.import_data)
-        import_button.pack(side=tk.LEFT, padx=5)
-
-        add_cat_button = ttk.Button(top_frame, text="Add Category", command=self.add_new_category)
-        add_cat_button.pack(side=tk.LEFT, padx=5)
-
-        show_analytics_button = ttk.Button(top_frame, text="Show Analytics", command=self.show_analytics)
-        show_analytics_button.pack(side=tk.LEFT, padx=5)
-
-        refresh_button = ttk.Button(category_frame, text="Refresh", command=self.refresh_unclassified)
-        refresh_button.pack(side=tk.RIGHT, padx=5)
 
     def import_data(self):
         """
@@ -150,95 +214,123 @@ class ExpenseClassifierApp:
 
     def refresh_unclassified(self):
         """
-        Refresh the treeview to display current unclassified expenses.
+        Refresh the treeview to display current unclassified expenses based on the selected filter.
         """
         # Clear existing items
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        # Fetch unclassified expenses
-        unclassified_expenses = self.get_unclassified_expenses()
+        # Fetch filtered unclassified expenses
+        transaction_type = self.transaction_type_filter.get()
+        unclassified_expenses = self.get_unclassified_expenses(transaction_type)
 
         for expense in unclassified_expenses:
             expense_id, transaction_date, amount, description, category = expense
             self.tree.insert("", "end", iid=expense_id, values=(transaction_date, amount, description, category))
 
-    def get_unclassified_expenses(self):
+    def get_unclassified_expenses(self, transaction_type="All"):
         """
         Retrieves rows from the 'expenses' table where category is 'Unclassified' or NULL.
+        Filters by transaction type if specified.
         """
         conn = sqlite3.connect('expenses.db')
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, transaction_date, amount, description, category
-            FROM expenses
-            WHERE category IS NULL OR category = 'Unclassified'
-        """)
+
+        if transaction_type == "All":
+            cursor.execute("""
+                SELECT id, transaction_date, amount, description, category
+                FROM expenses
+                WHERE category IS NULL OR category = 'Unclassified'
+            """)
+        else:
+            cursor.execute("""
+                SELECT id, transaction_date, amount, description, category
+                FROM expenses
+                WHERE (category IS NULL OR category = 'Unclassified')
+                AND description LIKE ?
+            """, (f"%{transaction_type}%",))
+        
         rows = cursor.fetchall()
         conn.close()
         return rows
 
+
     def classify_selected(self):
         """
-        Classify the selected expense with the chosen category from the dropdown.
-        Prompt the user if they want to classify all from the same merchant or just this one.
+        Classify the selected expense(s) with the chosen category from the dropdown.
+        If the 'Classify all expenses from this business in the same category' checkbox is checked,
+        classify all expenses from the same business.
         """
-        selected_item = self.tree.selection()
-        if not selected_item:
-            messagebox.showwarning("No Selection", "Please select an expense to classify.")
+        # Retrieve all selected items from the Treeview
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showwarning("No Selection", "Please select one or more expenses to classify.")
             return
 
+        # Retrieve the selected category from the dropdown
         category = self.selected_category.get()
         if not category:
             messagebox.showwarning("No Category", "Please select a category.")
             return
 
-        expense_id = selected_item[0]
-        # Get the description from the tree
-        item = self.tree.item(expense_id)
-        description = item['values'][2]  # index 2 is 'Description'
+        # Check the state of the 'Classify all expenses from this business' checkbox
+        classify_all = self.classify_all_checkbox.get()
 
-        # Extract the merchant name
-        merchant_name = extract_merchant_name(description)
+        # Prepare the confirmation message based on the checkbox state
+        num_selected = len(selected_items)
+        confirmation_message = f"Are you sure you want to classify {num_selected} expense(s) as '{category}'?"
+        if classify_all:
+            confirmation_message += "\nYou will classify all expenses from the selected businesses into this category."
 
-        # 1) Always update the selected expense
-        self.update_expense_category(expense_id, category)
+        # Display the confirmation dialog
+        confirm = messagebox.askyesno("Confirm Classification", confirmation_message)
+        if not confirm:
+            return  # User chose to cancel the operation
 
-        # 2) If merchant_name found, ask user if we should classify all
-        # transactions for that merchant.
-        if merchant_name:
-            answer = messagebox.askyesno(
-                "Update Classification Rules",
-                f"Would you like to classify all unclassified transactions "
-                f"from '{merchant_name}' as '{category}'?"
-            )
-            if answer:
-                # If yes, load current rules
-                rules = load_classification_rules()
+        # Initialize a set to store unique merchant names (in lowercase)
+        merchant_names = set()
 
-                # Add the merchant name to the selected category if not already present
+        # Iterate through each selected expense to extract merchant names if needed
+        for expense_id in selected_items:
+            item = self.tree.item(expense_id)
+            description = item['values'][2]  # Assuming 'Description' is the third column
+            merchant_name = extract_merchant_name(description)
+            if classify_all and merchant_name:
+                merchant_names.add(merchant_name.lower())
+
+        # If 'Classify all' is checked and there are merchant names, update classification rules
+        if classify_all and merchant_names:
+            # Load existing classification rules
+            rules = load_classification_rules()
+            updated = False  # Flag to track if rules are updated
+
+            for merchant_name in merchant_names:
+                # Check if the merchant is already in the selected category's keywords
                 if merchant_name not in (kw.lower() for kw in rules.get(category, [])):
+                    # Add the merchant name to the category's keyword list
                     rules[category].append(merchant_name)
-                    save_classification_rules(rules)
+                    updated = True
 
-                # Then update the DB for all unclassified transactions containing that merchant
+            # Save the updated classification rules if any changes were made
+            if updated:
+                save_classification_rules(rules)
+
+        # Classify each selected expense
+        for expense_id in selected_items:
+            self.update_expense_category(expense_id, category)  # Update the category in the database
+
+        # If 'Classify all' is checked, update all related transactions in the database
+        if classify_all and merchant_names:
+            for merchant_name in merchant_names:
                 self.update_related_transactions(merchant_name, category)
 
-                messagebox.showinfo(
-                    "Success",
-                    f"Expense ID {expense_id} classified as '{category}'.\n"
-                    f"Added '{merchant_name}' to category '{category}'."
-                )
-            else:
-                # If no, we just classified the single transaction above (already done),
-                # so do not add the merchant_name to the JSON rules.
-                messagebox.showinfo("Info", f"Classified only Expense ID {expense_id} as '{category}'.")
-        else:
-            # If no merchant name found, we just classify the single transaction
-            messagebox.showinfo("Success", f"Expense ID {expense_id} classified as '{category}'.")
+        # Refresh the Treeview to reflect the changes
+        self.refresh_unclassified()
 
-        # Remove the item from the tree (it's no longer unclassified)
-        self.tree.delete(expense_id)
+        # Display a success message to the user
+        messagebox.showinfo("Success", f"Classified {num_selected} expense(s) as '{category}'.")
+
+
 
     def update_related_transactions(self, keyword, category):
         """
