@@ -1,7 +1,7 @@
 # Expense Classifier
 
 ## Overview
-Expense Classifier is a Python-based application designed to help users categorize and analyze their financial transactions efficiently. The application supports importing transaction data from Excel files, dynamically classifying expenses using predefined or user-defined rules, and providing visual analytics to help track spending trends.
+Expense Classifier is a Python-based application designed to help users categorize and analyze their financial transactions efficiently. The application supports importing transaction data from Excel files, dynamically classifying expenses using predefined or user-defined rules, and providing visual analytics to help track spending trends. This app has been built to parse transaction data for the Netherlands, developed based on my ABN AMRO account statements, but I think it should work for any provider that lets you download your transactions into an Excel file with the headers "amount", "transactiondate", and "description". The analytics functionality is quite raw and I am working on it, but it is already useful for me while tracking expenses, especially when you pay somewhere and get 10 tikkies that end up showing your actual expense.
 
 This project is licensed under the **GNU General Public License v3.0**.
 
