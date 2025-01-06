@@ -1,0 +1,8 @@
+# .gitignore
+venvexpense/
+*.csv
+__pycache__/
+*.db
+data/
+*.txt
+*.json
