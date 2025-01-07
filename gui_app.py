@@ -2,6 +2,7 @@
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkcalendar import DateEntry  # Import DateEntry from tkcalendar
 from database_manager import insert_expense, create_expenses_table, expense_exists
 from parser_classifier import (
     classify_expense, extract_merchant_name,
@@ -14,8 +15,13 @@ import sqlite3
 import pandas as pd  # Ensure pandas is imported
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure  # Import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+import matplotlib.dates as mdates  # For date formatting
 from datetime import datetime, timedelta
+
+# Use the appropriate backend
+matplotlib.use('TkAgg')
 
 
 class ExpenseClassifierApp:
@@ -25,6 +31,7 @@ class ExpenseClassifierApp:
 
         # Dynamically load categories from the JSON file
         self.categories = get_categories()
+        self.analytics_window = None  # Track analytics window
 
         self.create_widgets()
         create_expenses_table()  # Ensure the database table exists
@@ -148,10 +155,6 @@ class ExpenseClassifierApp:
         classify_button = ttk.Button(category_frame, text="Classify Selected", command=self.classify_selected)
         classify_button.pack(side=tk.LEFT, padx=5)
 
-
-        
-
-
     def import_data(self):
         """
         Open a file dialog to select an Excel file, process it, and insert into the database.
@@ -249,11 +252,10 @@ class ExpenseClassifierApp:
                 WHERE (category IS NULL OR category = 'Unclassified')
                 AND description LIKE ?
             """, (f"%{transaction_type}%",))
-        
+
         rows = cursor.fetchall()
         conn.close()
         return rows
-
 
     def classify_selected(self):
         """
@@ -273,14 +275,14 @@ class ExpenseClassifierApp:
             messagebox.showwarning("No Category", "Please select a category.")
             return
 
-        # Check the state of the 'Classify all expenses from this business' checkbox
+        # Check the state of the 'Classify all expenses from this business in the same category' checkbox
         classify_all = self.classify_all_checkbox.get()
 
         # Prepare the confirmation message based on the checkbox state
         num_selected = len(selected_items)
         confirmation_message = f"Are you sure you want to classify {num_selected} expense(s) as '{category}'?"
         if classify_all:
-            confirmation_message += "\nYou will classify all expenses from the selected businesses into this category."
+            confirmation_message += f"\nYou will classify all expenses from the selected businesses into {category}."
 
         # Display the confirmation dialog
         confirm = messagebox.askyesno("Confirm Classification", confirmation_message)
@@ -328,9 +330,7 @@ class ExpenseClassifierApp:
         self.refresh_unclassified()
 
         # Display a success message to the user
-        messagebox.showinfo("Success", f"Classified {num_selected} expense(s) as '{category}'.")
-
-
+        #messagebox.showinfo("Success", f"Classified {num_selected} expense(s) as '{category}'.")
 
     def update_related_transactions(self, keyword, category):
         """
@@ -366,86 +366,253 @@ class ExpenseClassifierApp:
     def show_analytics(self):
         """
         Open a new window to display analytics with a line graph showing
-        expenses on a week-by-week basis for all categories.
+        expenses on a week-by-week basis for selected categories and date range.
         """
-        analytics_window = tk.Toplevel(self.root)
-        analytics_window.title("Expense Analytics")
-        analytics_window.geometry("800x600")
+        if self.analytics_window and tk.Toplevel.winfo_exists(self.analytics_window):
+            self.analytics_window.lift()  # Bring the existing window to front
+            return  # Do not create another window
 
+        # Create Analytics Window
+        self.analytics_window = tk.Toplevel(self.root)
+        self.analytics_window.title("Expense Analytics")
+        self.analytics_window.geometry("1000x700")  # Increased size for better layout
+
+        # Ensure the window is properly tracked and can be closed
+        self.analytics_window.protocol("WM_DELETE_WINDOW", self.on_close_analytics)
+
+        # Configure grid layout
+        self.analytics_window.columnconfigure(0, weight=1)
+        self.analytics_window.columnconfigure(1, weight=4)
+        self.analytics_window.rowconfigure(0, weight=1)
+
+        # Create frames
+        self.create_analytics_control_frame()
+        self.create_analytics_plot_frame()
+
+        # Initialize the graph once
+        self.refresh_analytics_graph()
+
+    def create_analytics_control_frame(self):
+        """Create the left-hand frame (control panel) in the analytics window."""
+        control_frame = ttk.Frame(self.analytics_window, padding="10")
+        control_frame.grid(row=0, column=0, sticky="NSEW")
+
+        # 1) Categories
+        category_label = ttk.Label(control_frame, text="Select Categories:", font=("Helvetica", 12, "bold"))
+        category_label.pack(anchor="w", pady=(0, 5))
+
+        # Make scrollable area for checkboxes
+        canvas = tk.Canvas(control_frame)
+        scrollbar = ttk.Scrollbar(control_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            )
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set, height=300)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Grab all categories
+        all_categories = get_categories()
+        self.analytics_category_vars = {}  # Store references to checkbox variables
+
+        for cat in all_categories:
+            var = tk.IntVar(value=1)  # default selected
+            chk = ttk.Checkbutton(scrollable_frame, text=cat, variable=var)
+            chk.pack(anchor="w")
+            self.analytics_category_vars[cat] = var
+
+        # 2) Date Range
+        date_label = ttk.Label(control_frame, text="Select Date Range:", font=("Helvetica", 12, "bold"))
+        date_label.pack(anchor="w", pady=(10, 5))
+
+        date_frame = ttk.Frame(control_frame)
+        date_frame.pack(anchor="w", pady=(0, 10))
+
+        # Start date
+        ttk.Label(date_frame, text="Start Date:").grid(row=0, column=0, padx=(0, 5), pady=5, sticky="e")
+        self.analytics_start_cal = DateEntry(
+            date_frame, width=12, background='darkblue',
+            foreground='white', borderwidth=2, date_pattern='y-mm-dd'
+        )
+        self.analytics_start_cal.grid(row=0, column=1, pady=5, sticky="w")
+
+        # End date
+        ttk.Label(date_frame, text="End Date:").grid(row=1, column=0, padx=(0, 5), pady=5, sticky="e")
+        self.analytics_end_cal = DateEntry(
+            date_frame, width=12, background='darkblue',
+            foreground='white', borderwidth=2, date_pattern='y-mm-dd'
+        )
+        self.analytics_end_cal.grid(row=1, column=1, pady=5, sticky="w")
+
+        # 3) Select / Deselect All Buttons
+        select_all_button = ttk.Button(control_frame, text="Select All", command=self.analytics_select_all_categories)
+        select_all_button.pack(anchor="w", pady=(5, 0))
+
+        deselect_all_button = ttk.Button(control_frame, text="Deselect All", command=self.analytics_deselect_all_categories)
+        deselect_all_button.pack(anchor="w", pady=(2, 10))
+
+        # 4) Refresh Button
+        refresh_button = ttk.Button(control_frame, text="Refresh Graph", command=self.refresh_analytics_graph)
+        refresh_button.pack(anchor="w", pady=(10, 0))
+
+    def create_analytics_plot_frame(self):
+        """Create the right-hand frame where the plot will be displayed."""
+        self.plot_frame = ttk.Frame(self.analytics_window, padding="10")
+        self.plot_frame.grid(row=0, column=1, sticky="NSEW")
+
+    def analytics_select_all_categories(self):
+        """Set all category checkboxes in analytics control frame to 1 (checked)."""
+        for var in self.analytics_category_vars.values():
+            var.set(1)
+
+    def analytics_deselect_all_categories(self):
+        """Set all category checkboxes in analytics control frame to 0 (unchecked)."""
+        for var in self.analytics_category_vars.values():
+            var.set(0)
+
+    def refresh_analytics_graph(self):
+        """Generate and display the analytics graph based on selected categories and date range."""
+        # 1) Validate user selections
+        selected_categories = [cat for cat, var in self.analytics_category_vars.items() if var.get() == 1]
+        if not selected_categories:
+            messagebox.showwarning("No Categories Selected", "Please select at least one category.")
+            self.clear_plot()
+            return
+
+        start_date = self.analytics_start_cal.get_date()
+        end_date = self.analytics_end_cal.get_date()
+        if start_date > end_date:
+            messagebox.showwarning("Invalid Date Range", "Start date must be before (or equal to) end date.")
+            self.clear_plot()
+            return
+
+        # 2) Query the data
         try:
-            # Fetch all classified expenses (exclude 'Unclassified' and NULL)
             conn = sqlite3.connect('expenses.db')
             cursor = conn.cursor()
-            cursor.execute("""
+            # We'll create the correct placeholders based on the number of categories
+            placeholders = ",".join(["?"] * len(selected_categories))
+            query = f"""
                 SELECT transaction_date, amount, category
                 FROM expenses
                 WHERE category IS NOT NULL AND category != 'Unclassified'
-            """)
+                  AND transaction_date BETWEEN ? AND ?
+                  AND category IN ({placeholders})
+            """
+            params = [start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')] + selected_categories
+            cursor.execute(query, params)
             data = cursor.fetchall()
             conn.close()
+        except Exception as e:
+            messagebox.showerror("Analytics Error", f"Database query failed:\n{e}")
+            self.clear_plot()
+            return
 
-            if not data:
-                messagebox.showinfo("No Data", "There are no classified expenses to display.")
-                analytics_window.destroy()
-                return
+        if not data:
+            messagebox.showinfo("No Data", "No expenses found for the selected criteria.")
+            self.clear_plot()
+            return
 
-            # Create DataFrame
-            df = pd.DataFrame(data, columns=['transaction_date', 'amount', 'category'])
+        # 3) Build a DataFrame
+        df = pd.DataFrame(data, columns=['transaction_date', 'amount', 'category'])
+        # Convert to datetime; remove invalid
+        df['transaction_date'] = pd.to_datetime(df['transaction_date'], format='%Y-%m-%d', errors='coerce')
+        df.dropna(subset=['transaction_date'], inplace=True)
+        if df.empty:
+            messagebox.showinfo("No Valid Dates", "No valid transaction dates found.")
+            self.clear_plot()
+            return
 
-            # Convert 'transaction_date' to datetime
-            df['transaction_date'] = pd.to_datetime(df['transaction_date'], format='%Y-%m-%d', errors='coerce')
+        # Convert negative amounts to positive so that we see spending as positive
+        # Adjust to your own logic for income vs expense
+        df['amount'] = df['amount'].apply(lambda x: -x if x < 0 else 0)
 
-            # Drop rows with invalid dates
-            df = df.dropna(subset=['transaction_date'])
+        # Set the date as the index and group by week
+        df.set_index('transaction_date', inplace=True)
+        weekly_data = df.groupby(['category', pd.Grouper(freq='W')])['amount'].sum().reset_index()
 
-            if df.empty:
-                messagebox.showinfo("No Valid Dates", "No valid transaction dates found.")
-                analytics_window.destroy()
-                return
+        # Pivot the data to have categories as columns
+        pivot_df = weekly_data.pivot(index='transaction_date', columns='category', values='amount').fillna(0)
+        if pivot_df.empty:
+            messagebox.showinfo("No Data After Processing", "No expenditure data after pivot.")
+            self.clear_plot()
+            return
 
-            # Set 'transaction_date' as the DataFrame index
-            df.set_index('transaction_date', inplace=True)
+        # 4) Plot
+        self.clear_plot()  # Remove any previous figure
+        try:
+            # Plotting using Object-Oriented Interface
+            fig = Figure(figsize=(10, 6), dpi=100)
+            ax = fig.add_subplot(111)
 
-            # Resample data on a weekly basis and sum amounts using pd.Grouper
-            weekly_data = df.groupby(['category', pd.Grouper(freq='W')]).sum().reset_index()
-
-            # Pivot the data to have categories as columns
-            pivot_df = weekly_data.pivot(index='transaction_date', columns='category', values='amount')
-            pivot_df = pivot_df.fillna(0)  # Replace NaN with 0
-
-            # Plotting
-            fig, ax = plt.subplots(figsize=(10, 6))
-
+            # Plot each category
             for category in pivot_df.columns:
                 ax.plot(pivot_df.index, pivot_df[category], marker='o', label=category)
 
             ax.set_title('Weekly Expenses by Category')
             ax.set_xlabel('Week')
-            ax.set_ylabel('Total Amount')
+            ax.set_ylabel('Total Amount Spent')
             ax.legend()
             ax.grid(True)
 
+            # Format X-axis labels
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+            plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+
             fig.autofmt_xdate()  # Auto-format date labels
 
-            # Embed the plot in the Tkinter window
-            canvas = FigureCanvasTkAgg(fig, master=analytics_window)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            # Embed the plot into Tk
+            self.canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+            self.canvas.draw()
+            self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-            # Optionally, add a toolbar for interactivity
-            toolbar = ttk.Frame(analytics_window)
-            toolbar.pack()
-            # Uncomment the following lines to add the navigation toolbar
-            # from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
-            # nav_toolbar = NavigationToolbar2Tk(canvas, analytics_window)
-            # nav_toolbar.update()
-            # canvas.get_tk_widget().pack()
+            # Add Matplotlib Navigation Toolbar
+            self.toolbar = NavigationToolbar2Tk(self.canvas, self.plot_frame)
+            self.toolbar.update()
+            self.canvas.get_tk_widget().pack()
+
+            # Add Export Button
+            export_button = ttk.Button(self.plot_frame, text="Save Graph", command=lambda: self.export_graph(fig))
+            export_button.pack(pady=10)
+
+            # Close the figure to free memory
+            plt.close(fig)
 
         except Exception as e:
-            messagebox.showerror("Analytics Error", f"An error occurred while generating analytics:\n{e}")
-            analytics_window.destroy()
+            messagebox.showerror("Plotting Error", f"An error occurred while generating the plot:\n{e}")
+            self.clear_plot()
 
-    
+    def clear_plot(self):
+        """Remove any previously drawn canvas/toolbar from the plot_frame."""
+        for widget in self.plot_frame.winfo_children():
+            widget.destroy()
+
+    def export_graph(self, fig):
+        """Save the current plot to an image file."""
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG files", "*.png"), ("JPEG files", "*.jpg"), ("All files", "*.*")]
+        )
+        if file_path:
+            try:
+                fig.savefig(file_path)
+                messagebox.showinfo("Export Successful", f"Graph saved to {file_path}")
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to save graph:\n{e}")
+
+    def on_close_analytics(self):
+        """Handle the closing of the analytics window."""
+        if self.analytics_window:
+            self.analytics_window.destroy()
+            self.analytics_window = None
 
     def add_new_category(self):
         """
