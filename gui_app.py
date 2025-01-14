@@ -9,7 +9,7 @@ from parser_classifier import (
     load_classification_rules, save_classification_rules,
     get_categories  # Import the new function
 )
-from data_reader import read_excel_file
+from data_reader import read_transaction_file
 import os
 import sqlite3
 import pandas as pd  # Ensure pandas is imported
@@ -32,6 +32,7 @@ class ExpenseClassifierApp:
         # Dynamically load categories from the JSON file
         self.categories = get_categories()
         self.analytics_window = None  # Track analytics window
+        self.supported_banks = ["ABN Amro", "ING"]
 
         self.create_widgets()
         create_expenses_table()  # Ensure the database table exists
@@ -86,15 +87,16 @@ class ExpenseClassifierApp:
         self.unclassified_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Define Treeview Columns
-        columns = ("Date", "Amount", "Description", "Category")
+        columns = ("Date", "Amount", "Description", "Category", "Bank", "Transaction Type")
 
         # Create Treeview with Extended Selection Mode
+        columns = ("Date", "Amount", "Description", "Category", "Bank", "Transaction Type")
         self.tree = ttk.Treeview(
             self.unclassified_frame,
             columns=columns,
             show='headings',
-            selectmode='extended',  # Enable multiple selection
-            height=20  # Set a reasonable default height
+            selectmode='extended',
+            height=20
         )
 
         # Define Column Headings and Configuration
@@ -102,12 +104,17 @@ class ExpenseClassifierApp:
         self.tree.heading("Amount", text="Amount")
         self.tree.heading("Description", text="Description")
         self.tree.heading("Category", text="Category")
+        self.tree.heading("Bank", text="Bank")
+        self.tree.heading("Transaction Type", text="Transaction Type")
+
 
         # Configure Column Alignment and Width
         self.tree.column("Date", anchor=tk.CENTER, width=100, stretch=False)
         self.tree.column("Amount", anchor=tk.CENTER, width=100, stretch=False)
         self.tree.column("Description", anchor=tk.W, width=300, stretch=True)  # Left-aligned
         self.tree.column("Category", anchor=tk.CENTER, width=150, stretch=False)
+        self.tree.column("Bank", anchor=tk.CENTER, width=150, stretch=False)
+        self.tree.column("Transaction Type", anchor=tk.CENTER, width=150, stretch=False)
 
         # Add Vertical Scrollbar
         vsb = ttk.Scrollbar(self.unclassified_frame, orient="vertical", command=self.tree.yview)
@@ -157,20 +164,26 @@ class ExpenseClassifierApp:
 
     def import_data(self):
         """
-        Open a file dialog to select an Excel file, process it, and insert into the database.
-        Avoid inserting duplicates based on transaction_date and description.
+        Open a dialog to select the bank, then open a file dialog to select an Excel file,
+        process it, and insert into the database with the selected bank.
         """
+        # Prompt user to select a bank
+        bank = self.select_bank_dialog()
+        if not bank:
+            return  # User cancelled
+
+        # Proceed with file selection
         file_path = filedialog.askopenfilename(
-            title="Select Excel File",
-            filetypes=[("Excel Files", "*.xlsx *.xls")]
+            title="Select Transactions File",
+            filetypes=[("Excel Files", "*.xlsx *.xls"), ("CSV Files", "*.csv")]
         )
         if not file_path:
             return  # User cancelled
 
         try:
-            df = read_excel_file(file_path)
+            df = read_transaction_file(file_path, bank)
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to read the Excel file.\n{e}")
+            messagebox.showerror("Error", f"Failed to read the file.\n{e}")
             return
 
         # Counters for feedback
@@ -183,6 +196,7 @@ class ExpenseClassifierApp:
             transaction_date = row['transactiondate']
             amount = row['amount']
             description = str(row['description'])  # ensure it's a string
+            transaction_type = row.get('transaction_type', 'Unknown')  # Default to 'Unknown' if not present
 
             # Convert transaction_date to string in 'YYYY-MM-DD' format
             if pd.notnull(transaction_date):
@@ -192,20 +206,18 @@ class ExpenseClassifierApp:
 
             # Check for duplicates
             if transaction_date_str and description:
-                if expense_exists(transaction_date_str, description, amount):
+                if expense_exists(transaction_date_str, description, amount, bank, transaction_type):
                     duplicates += 1
                     continue  # Skip inserting duplicate
             else:
-                # Optionally, decide how to handle missing date or description
-                # For now, we'll skip entries with missing critical info
                 duplicates += 1
                 continue
 
             # Classify
-            category = classify_expense(description)
+            category = classify_expense(description, bank, transaction_type)  # Pass transaction_type to classifier
 
-            # Insert into database
-            insert_expense(transaction_date_str, amount, description, category)
+            # Insert into database with bank and transaction type information
+            insert_expense(transaction_date_str, amount, description, category, bank, transaction_type)
             inserted += 1
 
         # Provide feedback to the user
@@ -213,8 +225,35 @@ class ExpenseClassifierApp:
                   f"Successfully Imported: {inserted}\n" \
                   f"Duplicates Skipped: {duplicates}"
         messagebox.showinfo("Import Results", message)
+        
+        self.update_transaction_type_filter()
         self.refresh_unclassified()
-
+    
+    def update_transaction_type_filter(self):
+        """
+        Populate the transaction type filter dropdown with all distinct transaction types from the DB, plus 'All'.
+        """
+        with sqlite3.connect('expenses.db') as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT transaction_type
+                FROM expenses
+                WHERE transaction_type IS NOT NULL AND transaction_type != ''
+            """)
+            results = cursor.fetchall()
+        transaction_types = [row[0] for row in results if row[0]]
+        transaction_types.sort()
+        self.filter_dropdown['values'] = ["All"] + transaction_types
+        
+    def select_bank_dialog(self):
+        """
+        Prompt the user to select a bank from a dropdown.
+        Returns the selected bank or None if cancelled.
+        """
+        dialog = BankSelectionDialog(self.root, self.supported_banks)
+        self.root.wait_window(dialog.top)
+        return dialog.selected_bank
+        
     def refresh_unclassified(self):
         """
         Refresh the treeview to display current unclassified expenses based on the selected filter.
@@ -228,8 +267,9 @@ class ExpenseClassifierApp:
         unclassified_expenses = self.get_unclassified_expenses(transaction_type)
 
         for expense in unclassified_expenses:
-            expense_id, transaction_date, amount, description, category = expense
-            self.tree.insert("", "end", iid=expense_id, values=(transaction_date, amount, description, category))
+            expense_id, transaction_date, amount, description, category, bank = expense
+            self.tree.insert("", "end", iid=expense_id, values=(transaction_date, amount, description, category, bank))
+
 
     def get_unclassified_expenses(self, transaction_type="All"):
         """
@@ -241,13 +281,13 @@ class ExpenseClassifierApp:
 
         if transaction_type == "All":
             cursor.execute("""
-                SELECT id, transaction_date, amount, description, category
+                SELECT id, transaction_date, amount, description, category, bank
                 FROM expenses
                 WHERE category IS NULL OR category = 'Unclassified'
             """)
         else:
             cursor.execute("""
-                SELECT id, transaction_date, amount, description, category
+                SELECT id, transaction_date, amount, description, category, bank
                 FROM expenses
                 WHERE (category IS NULL OR category = 'Unclassified')
                 AND description LIKE ?
@@ -645,6 +685,36 @@ class ExpenseClassifierApp:
                 self.category_dropdown['values'] = self.categories
                 messagebox.showinfo("Success", f"Added new category '{new_cat}'.")
 
+# Define the BankSelectionDialog
+class BankSelectionDialog:
+    def __init__(self, parent, banks):
+        top = self.top = tk.Toplevel(parent)
+        top.title("Select Bank")
+        top.grab_set()  # Make the dialog modal
+
+        ttk.Label(top, text="Select the bank for the transaction statements:").pack(padx=20, pady=10)
+
+        self.bank_var = tk.StringVar()
+        self.bank_combobox = ttk.Combobox(top, textvariable=self.bank_var, values=banks, state="readonly")
+        self.bank_combobox.pack(padx=20, pady=5)
+        self.bank_combobox.current(0)  # Set default selection
+
+        button_frame = ttk.Frame(top)
+        button_frame.pack(pady=10)
+
+        ttk.Button(button_frame, text="OK", command=self.ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=self.cancel).pack(side=tk.LEFT, padx=5)
+
+        self.selected_bank = None
+
+    def ok(self):
+        self.selected_bank = self.bank_var.get()
+        self.top.destroy()
+
+    def cancel(self):
+        self.top.destroy()
+        
+        
 def run_gui_classification_app():
     root = tk.Tk()
     app = ExpenseClassifierApp(root)

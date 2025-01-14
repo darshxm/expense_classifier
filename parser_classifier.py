@@ -32,7 +32,10 @@ def extract_naam_field(description):
     Extract the 'Naam' field from a transaction description.
     Captures multiple words if present.
     """
-    pattern = r"Naam:\s*(.+?)\s*(?:Omschrijving|IBAN|Kenmerk|Voor:|$)"
+    #pattern = r"Naam:\s*(.+?)\s*(?:Omschrijving|IBAN|Kenmerk|Voor:|$)"
+    # Capture both "Naam:" and "Name:"
+    pattern = r"(?:Naam|Name):\s*(.+?)\s*(?:Omschrijving|Description|IBAN|Kenmerk|Voor:|Reference|$)"
+
     match = re.search(pattern, description, re.IGNORECASE)
     if match:
         return match.group(1).strip()
@@ -126,12 +129,13 @@ def get_categories():
     rules = load_classification_rules()
     return list(rules.keys())
 
-def classify_expense(description):
+def classify_expense(description, bank, transaction_type):
     """
-    Classify the expense based on the transaction description.
-    - Uses classification_rules.json for automatic categorization.
-    - Handles Tikkie transactions by extracting 'Omschrijving'.
-    - Defaults to 'Unclassified' if no rules match.
+    Classify the expense based on:
+      - transaction description
+      - bank (ABN Amro / ING)
+      - transaction type (e.g., iDEAL, Tikkie, PAS, SEPA)
+    Uses classification_rules.json for auto-categorization.
     """
     lower_desc = description.lower()
 
