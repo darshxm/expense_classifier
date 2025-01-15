@@ -19,7 +19,7 @@ from matplotlib.figure import Figure  # Import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import matplotlib.dates as mdates  # For date formatting
 from datetime import datetime, timedelta
-
+from prophet import Prophet
 # Use the appropriate backend
 matplotlib.use('TkAgg')
 
@@ -483,6 +483,18 @@ class ExpenseClassifierApp:
             foreground='white', borderwidth=2, date_pattern='y-mm-dd'
         )
         self.analytics_start_cal.grid(row=0, column=1, pady=5, sticky="w")
+        
+        # Plot Granularity
+        ttk.Label(control_frame, text="Plot Granularity:").pack(anchor="w", pady=(5, 2))
+        self.plot_granularity_var = tk.StringVar(value="Daily")
+        plot_granularity_options = ["Daily", "Weekly", "Monthly"]
+        self.plot_granularity_dropdown = ttk.Combobox(
+            control_frame,
+            textvariable=self.plot_granularity_var,
+            values=plot_granularity_options,
+            state="readonly"
+        )
+        self.plot_granularity_dropdown.pack(anchor="w", pady=(0, 10))        
 
         # End date
         ttk.Label(date_frame, text="End Date:").grid(row=1, column=0, padx=(0, 5), pady=5, sticky="e")
@@ -502,6 +514,59 @@ class ExpenseClassifierApp:
         # 4) Refresh Button
         refresh_button = ttk.Button(control_frame, text="Refresh Graph", command=self.refresh_analytics_graph)
         refresh_button.pack(anchor="w", pady=(10, 0))
+        
+        # ---------------------------
+        # Forecasting Section
+        # ---------------------------
+        forecast_label = ttk.Label(control_frame, text="Forecasting Options:", font=("Helvetica", 12, "bold"))
+        forecast_label.pack(anchor="w", pady=(20, 5))
+
+        # Select Category for Forecasting
+        ttk.Label(control_frame, text="Select Category:").pack(anchor="w", pady=(5, 2))
+        self.forecast_category_var = tk.StringVar()
+        self.forecast_category_dropdown = ttk.Combobox(
+            control_frame,
+            textvariable=self.forecast_category_var,
+            values=self.categories,
+            state="readonly"
+        )
+        self.forecast_category_dropdown.pack(anchor="w", pady=(0, 10))
+
+        # Select Forecast Period
+        ttk.Label(control_frame, text="Forecast Period (days):").pack(anchor="w", pady=(5, 2))
+        self.forecast_period_var = tk.IntVar(value=30)  # Default to 30 days
+        self.forecast_period_entry = ttk.Entry(control_frame, textvariable=self.forecast_period_var, width=10)
+        self.forecast_period_entry.pack(anchor="w", pady=(0, 10))
+
+        # Forecast Button
+        forecast_button = ttk.Button(control_frame, text="Generate Forecast", command=self.generate_forecast)
+        forecast_button.pack(anchor="w", pady=(5, 10))   
+
+
+        # Forecast Granularity
+        ttk.Label(control_frame, text="Forecast Granularity:").pack(anchor="w", pady=(5, 2))
+        self.forecast_granularity_var = tk.StringVar(value="Daily")
+        granularity_options = ["Daily", "Weekly", "Monthly"]
+        self.forecast_granularity_dropdown = ttk.Combobox(
+            control_frame,
+            textvariable=self.forecast_granularity_var,
+            values=granularity_options,
+            state="readonly"
+        )
+        self.forecast_granularity_dropdown.pack(anchor="w", pady=(0, 10))
+        
+        # Seasonality Options
+        ttk.Label(control_frame, text="Seasonality Options:", font=("Helvetica", 12, "bold")).pack(anchor="w", pady=(20, 5))
+
+        self.daily_seasonality_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(control_frame, text="Daily Seasonality", variable=self.daily_seasonality_var).pack(anchor="w")
+
+        self.weekly_seasonality_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(control_frame, text="Weekly Seasonality", variable=self.weekly_seasonality_var).pack(anchor="w")
+
+        self.yearly_seasonality_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(control_frame, text="Yearly Seasonality", variable=self.yearly_seasonality_var).pack(anchor="w")
+        
 
     def create_analytics_plot_frame(self):
         """Create the right-hand frame where the plot will be displayed."""
@@ -538,7 +603,6 @@ class ExpenseClassifierApp:
         try:
             conn = sqlite3.connect('expenses.db')
             cursor = conn.cursor()
-            # We'll create the correct placeholders based on the number of categories
             placeholders = ",".join(["?"] * len(selected_categories))
             query = f"""
                 SELECT transaction_date, amount, category
@@ -563,7 +627,6 @@ class ExpenseClassifierApp:
 
         # 3) Build a DataFrame
         df = pd.DataFrame(data, columns=['transaction_date', 'amount', 'category'])
-        # Convert to datetime; remove invalid
         df['transaction_date'] = pd.to_datetime(df['transaction_date'], format='%Y-%m-%d', errors='coerce')
         df.dropna(subset=['transaction_date'], inplace=True)
         if df.empty:
@@ -571,16 +634,23 @@ class ExpenseClassifierApp:
             self.clear_plot()
             return
 
-        # Convert negative amounts to positive so that we see spending as positive
-        # Adjust to your own logic for income vs expense
-        df['amount'] = df['amount'].apply(lambda x: -x if x < 0 else 0)
+        # Invert signs: Expenses as positive, Incomes as negative
+        df['amount'] = df['amount'].apply(lambda x: -x)
 
-        # Set the date as the index and group by week
+        # Set the date as the index and group by week and category
         df.set_index('transaction_date', inplace=True)
-        weekly_data = df.groupby(['category', pd.Grouper(freq='W')])['amount'].sum().reset_index()
+        granularity = self.plot_granularity_var.get()
+
+        # Modify the grouping based on granularity
+        if granularity == "Daily":
+            graph_data = df.groupby(['category'])['amount'].sum().reset_index()
+        elif granularity == "Weekly":
+            graph_data = df.groupby(['category', pd.Grouper(freq='W')])['amount'].sum().reset_index()
+        elif granularity == "Monthly":
+            graph_data = df.groupby(['category', pd.Grouper(freq='ME')])['amount'].sum().reset_index()            
 
         # Pivot the data to have categories as columns
-        pivot_df = weekly_data.pivot(index='transaction_date', columns='category', values='amount').fillna(0)
+        pivot_df = graph_data.pivot(index='transaction_date', columns='category', values='amount').fillna(0)
         if pivot_df.empty:
             messagebox.showinfo("No Data After Processing", "No expenditure data after pivot.")
             self.clear_plot()
@@ -589,7 +659,6 @@ class ExpenseClassifierApp:
         # 4) Plot
         self.clear_plot()  # Remove any previous figure
         try:
-            # Plotting using Object-Oriented Interface
             fig = Figure(figsize=(10, 6), dpi=100)
             ax = fig.add_subplot(111)
 
@@ -597,14 +666,14 @@ class ExpenseClassifierApp:
             for category in pivot_df.columns:
                 ax.plot(pivot_df.index, pivot_df[category], marker='o', label=category)
 
-            ax.set_title('Weekly Expenses by Category')
+            ax.set_title(f'{granularity} Net Expenses by Category')
             ax.set_xlabel('Week')
-            ax.set_ylabel('Total Amount Spent')
+            ax.set_ylabel('Net Amount (€)')
             ax.legend()
             ax.grid(True)
 
             # Format X-axis labels
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
             plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
 
             fig.autofmt_xdate()  # Auto-format date labels
@@ -623,12 +692,137 @@ class ExpenseClassifierApp:
             export_button = ttk.Button(self.plot_frame, text="Save Graph", command=lambda: self.export_graph(fig))
             export_button.pack(pady=10)
 
-            # Close the figure to free memory
             plt.close(fig)
 
         except Exception as e:
             messagebox.showerror("Plotting Error", f"An error occurred while generating the plot:\n{e}")
             self.clear_plot()
+
+
+    def generate_forecast(self):
+        """
+        Generate and display a forecast for the selected category over the specified period.
+        """
+        category = self.forecast_category_var.get()
+        periods = self.forecast_period_var.get()
+
+        if not category:
+            messagebox.showwarning("No Category Selected", "Please select a category to forecast.")
+            return
+
+        if periods <= 0:
+            messagebox.showwarning("Invalid Period", "Please enter a positive number of days for the forecast period.")
+            return
+
+
+        try:
+            # Fetch historical expense data for the selected category
+            df = self.get_historical_data(category)
+
+            if df.empty:
+                messagebox.showinfo("No Data", f"No historical data found for category '{category}'.")
+                return
+
+            # Prepare data for Prophet
+            #prophet_df = df.groupby('transaction_date')['amount'].sum().reset_index()
+            granularity = self.forecast_granularity_var.get()
+
+            # Modify the grouping based on granularity
+            if granularity == "Daily":
+                prophet_df = df.groupby('transaction_date')['amount'].sum().reset_index()
+            elif granularity == "Weekly":
+                prophet_df = df.groupby(pd.Grouper(key='transaction_date', freq='W'))['amount'].sum().reset_index()
+            elif granularity == "Monthly":
+                prophet_df = df.groupby(pd.Grouper(key='transaction_date', freq='ME'))['amount'].sum().reset_index()            
+            prophet_df.rename(columns={'transaction_date': 'ds', 'amount': 'y'}, inplace=True)
+
+            # Seasonality settings
+            daily_seasonality = self.daily_seasonality_var.get()
+            weekly_seasonality = self.weekly_seasonality_var.get()
+            yearly_seasonality = self.yearly_seasonality_var.get()
+
+            # Initialize Prophet with selected seasonality
+            model = Prophet(
+                daily_seasonality=daily_seasonality,
+                weekly_seasonality=weekly_seasonality,
+                yearly_seasonality=yearly_seasonality
+            )
+            model.fit(prophet_df)
+
+            # Create a dataframe to hold predictions
+            future = model.make_future_dataframe(periods=periods)
+            forecast = model.predict(future)
+
+            # Plot the forecast using matplotlib
+            fig = model.plot(forecast)
+            plt.title(f'Forecast for {category}')
+            plt.xlabel('Date')
+            plt.ylabel('Amount')
+
+            # Create a new window to display the plot
+            forecast_window = tk.Toplevel(self.analytics_window)
+            forecast_window.title(f"Forecast for {category}")
+
+            # Embed the plot in Tkinter
+            canvas = FigureCanvasTkAgg(fig, master=forecast_window)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+            # Add a toolbar for interactivity
+            toolbar = NavigationToolbar2Tk(canvas, forecast_window)
+            toolbar.update()
+            canvas.get_tk_widget().pack()
+
+            # Optionally, add a button to save the forecast plot
+            save_button = ttk.Button(forecast_window, text="Save Plot", command=lambda: self.save_plot(fig))
+            save_button.pack(pady=10)
+
+        except Exception as e:
+            messagebox.showerror("Forecasting Error", f"An error occurred during forecasting:\n{e}")
+
+    def save_plot(self, fig):
+        """Save the given matplotlib figure to a file."""
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG files", "*.png"), ("JPEG files", "*.jpg"), ("All files", "*.*")]
+        )
+        if file_path:
+            try:
+                fig.savefig(file_path)
+                messagebox.showinfo("Export Successful", f"Forecast plot saved to {file_path}")
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to save plot:\n{e}")
+
+    def get_historical_data(self, category):
+        """
+        Retrieve historical expense data for a specific category.
+        
+        Parameters:
+        - category: str, the category to fetch data for.
+        
+        Returns:
+        - pd.DataFrame with columns ['transaction_date', 'amount'].
+        """
+        conn = sqlite3.connect('expenses.db')
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT transaction_date, amount
+            FROM expenses
+            WHERE category = ?
+        """, (category,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Convert to DataFrame
+        df = pd.DataFrame(rows, columns=['transaction_date', 'amount'])
+
+        # Convert 'transaction_date' to datetime
+        df['transaction_date'] = pd.to_datetime(df['transaction_date'], format='%Y-%m-%d', errors='coerce')
+
+        # Drop rows with invalid dates
+        df.dropna(subset=['transaction_date'], inplace=True)
+
+        return df
 
     def clear_plot(self):
         """Remove any previously drawn canvas/toolbar from the plot_frame."""
