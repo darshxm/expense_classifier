@@ -5,7 +5,9 @@ on:
   push:
     branches:
       - main  # Replace with your default branch if different
-
+permissions:
+  contents: write  # Allows the workflow to push changes
+  
 jobs:
   update-requirements:
     runs-on: ubuntu-latest
@@ -14,8 +16,6 @@ jobs:
       # Step 1: Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
-        with:
-          persist-credentials: false  # Prevents the default token from being used
 
       # Step 2: Set up Python environment
       - name: Set up Python
