@@ -6,3 +6,6 @@ __pycache__/
 data/
 *.txt
 *.json
+
+# Do not ignore requirements.txt
+!requirements.txt
